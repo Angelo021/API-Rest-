@@ -1,115 +1,131 @@
-# API-Rest-
-# Sistema de Gerenciamento de Produtos e Estoque 
+# Projeto FastAPI com SQLAlchemy
 
-O sistema gerencia o ciclo de vida de produtos e seus respectivos estoques em uma operação comercial. 
+## Configuração
 
-- **Produtos** - Itens comercializaveis com nome e descrição
-- **Estoque** - Quantidade disponível de cada produto com controle de estado
-- **Movimentação** - Operação de entrada , saída e reserva
-- **Transições de estado** - Ciclo de vida do estoque ( ativo -> reservado -> baixo -> sem estoque -> descontinuado )
-
-  Diagrama Entidade Relacionamento ( ER )
-
-  <img width="918" height="852" alt="Captura de tela_15-6-2026_134053_www make-charts com" src="https://github.com/user-attachments/assets/dc145f10-dd23-416c-9f5a-c3857614148f" />
-
-  ## Como rodar localmente
-
-- **Pré-requisitos** - Docker e Docker Compose
-- ProstregSQL
-- Python 3.11
-
-docker-compose up --build
-
-## Lista de Regras de Negócio
-
--**Produto**
-Descrição: Representa um item comercializável no sistema, podendo ser um produto físico ou serviço que possui controle de estoque associado.
-
-| Atributo     | Tipo          | Obrigatório | Constraints                           | Descrição                     |
-| :----------- | :------------ | :---------- | :------------------------------------ | :---------------------------- |
-| id           | Integer       | Sim         | PK, Auto-incremento                   | Identificador único do produto |
-| nome         | String(100)   | Sim         | NOT NULL, UNIQUE, min 1 char          | Nome comercial do produto     |
-| descricao    | String(500)   | Não         | -                                     | Descrição detalhada do produto |
-| created_at   | DateTime      | Sim         | DEFAULT NOW()                         | Data de criação do registro   |
-| updated_at   | DateTime      | Não         | ON UPDATE                             | Data da última alteração      |
-| deleted_at   | DateTime      | Não         | NULLABLE                              | Data de soft delete           |
-
-- **Estoque**
-Descrição: Controla a quantidade disponível e o estado de um produto específico. Cada produto possui exatamente um registro de estoque.
-
-| Atributo     | Tipo     | Obrigatório | Constraints              | Descrição                                  |
-|--------------|----------|-------------|--------------------------|--------------------------------------------|
-| id           | Integer  | Sim         | PK, Auto-incremento      | Identificador único do estoque             |
-| produto_id   | Integer  | Sim         | FK(produtos.id), UNIQUE  | Referência ao produto                      |
-| quantidade   | Integer  | Sim         | DEFAULT 0, >= 0          | Quantidade atual em estoque                |
-| status       | Enum     | Sim         | DEFAULT 'ativo'          | Estado atual do estoque                    |
-| version      | Integer  | Sim         | DEFAULT 1                | Controle de concorrência otimista          |
-| created_at   | DateTime | Sim         | DEFAULT NOW()            | Data de criação                            |
-| updated_at   | DateTime | Não         | ON UPDATE                | Data da última atualização                 |
-
-RN 01 - **Estoque não pode ficar negativo**
-| Campo        | Valor                                                                                                                                                                                                                                                                                         |
-|--------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Identificador| RN-001                                                                                                                                                                                                                                                                                        |
-| Nome         | Integridade de estoque não negativo                                                                                                                                                                                                                                                           |
-| Gatilho      | Ao dar baixa, reservar ou atualizar estoque (métodos que diminuem quantidade)                                                                                                                                                                                                                 |
-| Pré-condição | Estoque existe e está em estado não terminal (ATIVO, BAIXO, SEM_ESTOQUE ou RESERVADO)                                                                                                                                                                                                          |
-| Ação         | Sistema calcula nova_quantidade = quantidade_atual - quantidade_solicitada. Se nova_quantidade < 0, rejeita a operação e retorna erro. Se válida, executa a atualização e registra movimentação.                                                                                             |
-| Violação     | HTTP Status: 400 Bad Request<br>Payload:                                                                                                                                                                                                                                                        |
-
-RN 02 - **Versionamento**
-Campo	Valor
-Identificador	RN-002
-Nome	Controle de concorrência via optimistic locking
-Gatilho	Ao atualizar qualquer atributo do estoque (quantidade ou status)
-Pré-condição	Cliente fornece a versão atual do registro (obtida na última leitura)
-Ação	Sistema verifica se version recebida == version atual no banco. Se igual, atualiza e incrementa version. Se diferente, rejeita com erro de concorrência. Implementa retry com backoff exponencial (3 tentativas).
-Violação	HTTP Status: 409 Conflict
-Payload:
-
-RN 03 - **Estados terminais**
-Regras de Negócio para Imutabilidade de Estados Terminais de Estoque
-Fonte: elaboração própria.
-Campo	Valor
-Identificador	RN-003
-Nome	Imutabilidade de estados terminais
-Gatilho	Ao tentar modificar um estoque em estado DESCONTINUADO ou CANCELADO (qualquer operação que não seja leitura)
-Pré-condição	Estoque existe e está em estado terminal (DESCONTINUADO ou CANCELADO)
-Ação	Sistema rejeita qualquer operação de modificação (atualização, baixa, reserva). Apenas consultas são permitidas. Para modificar, é necessário criar um novo registro de estoque.
-Violação	HTTP Status: 400 Bad Request
-Payload:
-
-RN 04 - **Produto com estoque não pode ser deletado**
-
-Campo	Valor
-Identificador	RN-004
-Nome	Proteção de exclusão de produto com estoque
-Gatilho	Ao tentar deletar (DELETE) um produto que possui estoque
-Pré-condição	Produto existe e não foi previamente deletado (soft delete)
-Ação	Sistema verifica se o estoque associado tem quantidade > 0. Se positivo, rejeita a exclusão e orienta o usuário a zerar o estoque primeiro. O produto só pode ser deletado via soft delete quando estoque = 0.
-Violação	HTTP Status: 409 Conflict
-Payload:
-
-RN 05 - **Notificação automática**
-
-Campo	Valor
-Identificador	RN-005
-Nome	Alerta de estoque baixo
-Gatilho	Ao atualizar quantidade de estoque (entrada, saída, ajuste)
-Pré-condição	Estoque existe e a nova quantidade é ≥ 0
-Ação	Após cada atualização, sistema verifica: se nova_quantidade < ESTOQUE_BAIXO_THRESHOLD (default=5) e nova_quantidade > 0, muda status para BAIXO e dispara notificação (email/slack/log). Se nova_quantidade == 0, muda para SEM_ESTOQUE. Se nova_quantidade >= 5 e estava em BAIXO, muda para ATIVO.
-Violação	Esta regra não gera erro, mas sim um evento de notificação. Se o sistema de notificação falhar, registra erro em log mas não interrompe a operação principal.
-Justificativa	Previne ruptura de estoque. Time de compras precisa ser alertado antes que o produto acabe completamente.
+1. Clone o repositório
+2. Copie `.env.example` para `.env` e configure as variáveis
+3. Execute com Docker:
+   ```bash
+   docker-compose up --build
 
 
+5.1.1  
+Independência semântica: Produto e Estoque são conceitos distintos - um produto pode existir sem estoque (ex: produto descontinuado), mas estoque não existe sem produto.
 
+Escalabilidade: Permite futuros tipos de estoque (múltiplos armazéns, lote, validade) sem alterar a tabela de produtos.
 
+Integridade referencial: A FK garante que não haja estoque órfão, mantendo consistência.
 
+5.1.2 
+Justificativa:
+Camada	Regras colocadas	Motivo
+Pydantic	Validações sintáticas (tipos, formato, ranges básicos)	Validação precoce, retorno rápido, evita acesso ao banco desnecessário
+Service	Regras de negócio (existência, estados, relações)	Acesso a banco de dados, lógica transacional, orquestração
 
+5.1.3 
+Mudança no entendimento do domínio:
+Antes	Depois
+Estoque apenas armazenava quantidade	Estoque tem ciclo de vida (ativo/reservado/baixo/sem_estoque)
+Sistema sem controle de concorrência	Sistema com optimistic locking via version
+Deletar produto = deletar estoque	Produto pode ser desativado mantendo histórico
 
+5.1.4 
+Justificativa:
+Por que não Pessimistic Lock?
 
+Menos escalável para leitura frequente
 
+Risco de deadlock em operações rápidas
 
+Comportamento correto:
 
+Ambos usuários carregam estoque (version=1, quantidade=10)
 
+Usuário A dá baixa de 3 → update com WHERE version=1 → sucesso (version=2, quantidade=7)
 
+5.1.5 
+Estados terminais: DESCONTINUADO e CANCELADO
+Por que não faz sentido retornar de um estado terminal:
+
+Imutabilidade histórica: Produto descontinuado representa uma decisão comercial final. Reativar seria um produto novo (com novo ID), não a mesma entidade.
+
+5.2.1 
+Regra: Produto não é deletado fisicamente se tem estoque - apenas marcado como inativo.
+
+5.2.2
+def dar_baixa(self, produto_id: int, quantidade: int):
+    with self.db.begin():
+        estoque = self.estoque_repository.get_by_produto_id_with_lock(produto_id)
+        
+        if quantidade > estoque.quantidade:
+            raise EstoqueInsuficienteException(
+                f"Estoque atual: {estoque.quantidade}, solicitado: {quantidade}"
+            )
+        
+        novo_estoque = estoque.quantidade - quantidade
+        estoque.quantidade = novo_estoque
+        
+        # Ações automáticas quando atinge zero
+        if novo_estoque == 0:
+            estoque.status = EstoqueStatus.SEM_ESTOQUE
+            self._notificar_falta_estoque(produto_id)
+            self._criar_pedido_reposicao_automatico(produto_id)
+        elif novo_estoque < 5:  # Threshold configurável
+            estoque.status = EstoqueStatus.BAIXO
+            self._notificar_estoque_baixo(produto_id, novo_estoque)
+        
+        self.estoque_repository.update(estoque)
+
+5.2.3
+def adicionar_estoque(self, estoque_id: int, quantidade: int):
+    estoque = self.estoque_repository.get_by_id(estoque_id)
+    
+    if estoque.status in [EstoqueStatus.DESCONTINUADO, EstoqueStatus.CANCELADO]:
+        raise EstadoTerminalException(
+            f"Estoque está em estado terminal '{estoque.status}'. "
+            "Para adicionar estoque, crie um novo registro ou reative o produto."
+        )
+    
+    # Lógica normal de adição...
+    estoque.quantidade += quantidade
+    if estoque.quantidade > 0 and estoque.status == EstoqueStatus.SEM_ESTOQUE:
+        estoque.status = EstoqueStatus.ATIVO
+
+5.2.4
+def reservar_estoque(self, produto_id: int, quantidade: int, data_inicio: date, data_fim: date):
+    # Verifica sobreposição de reservas
+    reservas_conflitantes = self.db.query(ReservaEstoque).filter(
+        ReservaEstoque.produto_id == produto_id,
+        ReservaEstoque.status == 'ativa',
+        ReservaEstoque.data_inicio < data_fim,
+        ReservaEstoque.data_fim > data_inicio
+    ).all()
+    
+    if reservas_conflitantes:
+        raise DataOverlapException(
+            f"Período conflita com reservas: {[(r.data_inicio, r.data_fim) for r in reservas_conflitantes]}"
+        )
+    
+    # Lógica de reserva...
+
+5.2.5 
+def transferir_estoque(self, origem_id: int, destino_id: int, quantidade: int):
+    """
+    Transferência entre armazéns - nunca pode resultar em negativo
+    """
+    with self.db.begin():
+        origem = self.estoque_repository.get_by_id_with_lock(origem_id)
+        
+        # Validação antes de qualquer modificação
+        if origem.quantidade - quantidade < 0:
+            raise CalculoNegativoException(
+                f"Transferência de {quantidade} resultaria em estoque negativo "
+                f"({origem.quantidade} atual no armazém de origem)"
+            )
+        
+        # Aplica em ordem para nunca ter negativo
+        origem.quantidade -= quantidade
+        destino = self.estoque_repository.get_by_id_with_lock(destino_id)
+        destino.quantidade += quantidade
+        
+        self.estoque_repository.bulk_update([origem, destino])
