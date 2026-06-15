@@ -47,7 +47,7 @@ Descrição: Controla a quantidade disponível e o estado de um produto específ
 | created_at   | DateTime | Sim         | DEFAULT NOW()            | Data de criação                            |
 | updated_at   | DateTime | Não         | ON UPDATE                | Data da última atualização                 |
 
-### 
+### Estoque não pode ficar negativo
 | Campo        | Valor                                                                                                                                                                                                                                                                                         |
 |--------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Identificador| RN-001                                                                                                                                                                                                                                                                                        |
@@ -56,14 +56,11 @@ Descrição: Controla a quantidade disponível e o estado de um produto específ
 | Pré-condição | Estoque existe e está em estado não terminal (ATIVO, BAIXO, SEM_ESTOQUE ou RESERVADO)                                                                                                                                                                                                          |
 | Ação         | Sistema calcula nova_quantidade = quantidade_atual - quantidade_solicitada. Se nova_quantidade < 0, rejeita a operação e retorna erro. Se válida, executa a atualização e registra movimentação.                                                                                             |
 | Violação     | HTTP Status: 400 Bad Request<br>Payload:                                                                                                                                                                                                                                                        |
-Campo	Valor
-Identificador	RN-002
-Nome	Controle de concorrência via optimistic locking
-Gatilho	Ao atualizar qualquer atributo do estoque (quantidade ou status)
-Pré-condição	Cliente fornece a versão atual do registro (obtida na última leitura)
-Ação	Sistema verifica se version recebida == version atual no banco. Se igual, atualiza e incrementa version. Se diferente, rejeita com erro de concorrência. Implementa retry com backoff exponencial (3 tentativas).
-Violação	HTTP Status: 409 Conflict
-Payload:
+
+###Versionamento 
+<img width="993" height="1404" alt="image" src="https://github.com/user-attachments/assets/064873bd-259a-4749-9ff4-5f96ae4a7ef3" />
+
+
 
 
 
